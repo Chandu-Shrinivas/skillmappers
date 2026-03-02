@@ -12,10 +12,10 @@ export default function ProfilePage() {
   const [codeHistory, setCodeHistory] = useState([]);
 
   useEffect(() => {
-    axios.get(`${API}/progress`).then(r => setProgress(r.data)).catch(() => {});
-    axios.get(`${API}/history/quizzes`).then(r => setQuizHistory(r.data)).catch(() => {});
-    axios.get(`${API}/history/interviews`).then(r => setInterviewHistory(r.data)).catch(() => {});
-    axios.get(`${API}/history/code`).then(r => setCodeHistory(r.data)).catch(() => {});
+    axios.get(`${API}/progress`).then(r => setProgress(r.data)).catch(() => { });
+    axios.get(`${API}/history/quizzes`).then(r => setQuizHistory(r.data)).catch(() => { });
+    axios.get(`${API}/history/interviews`).then(r => setInterviewHistory(r.data)).catch(() => { });
+    axios.get(`${API}/history/code`).then(r => setCodeHistory(r.data)).catch(() => { });
   }, []);
 
   const xpInLevel = progress.xp % 500;

@@ -5,12 +5,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { FALLBACK_INTERVIEW_QUESTIONS } from "@/data/aptitudeData";
 import axios from "axios";
 import { toast } from "sonner";
+import { useUser } from "@clerk/clerk-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const FILLER_WORDS = ["um", "uh", "like", "you know", "basically", "actually", "so", "well", "i mean", "kind of", "sort of"];
 
 export default function CommunicationPage() {
+  const { user } = useUser();
   const [view, setView] = useState("menu");
   const [recording, setRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -35,12 +37,28 @@ export default function CommunicationPage() {
   const recordStartRef = useRef(null);
 
   // Camera
-  const startCamera = useCallback(() => {
-    // We no longer need getUserMedia since the backend handles it via OpenCV
-    setCameraOn(true);
+  const startCamera = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      streamRef.current = stream;
+      setCameraOn(true);
+    } catch {
+      toast.error("Camera access denied");
+    }
   }, []);
 
+  // Assign stream to video element whenever camera turns on or ref changes
+  useEffect(() => {
+    if (cameraOn && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [cameraOn]);
+
   const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
     setCameraOn(false);
   }, []);
 
@@ -177,6 +195,7 @@ export default function CommunicationPage() {
         const t = allTranscripts[i] || "";
         if (t.trim()) {
           const res = await axios.post(`${API}/interview/evaluate`, {
+            user_id: user?.id || "default",
             question: interviewQuestions[i],
             transcript: t,
             filler_words: fillerCount,
@@ -453,7 +472,7 @@ export default function CommunicationPage() {
             <div className="lg:col-span-1">
               <div className="camera-preview aspect-video bg-zinc-900 relative">
                 {cameraOn ? (
-                  <img src={`${API}/video_feed`} alt="Camera Feed" className="w-full h-full object-cover" />
+                  <video ref={videoRef} autoPlay muted playsInline className="w-full h-full" />
                 ) : (
                   <div className="absolute inset-0 flex flex-col items-center justify-center">
                     <CameraOff className="w-8 h-8 text-zinc-600 mb-2" />

@@ -1,45 +1,57 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation, Navigate } from "react-router-dom";
+import { SignedIn, SignedOut } from "@clerk/clerk-react";
 import Header from "@/components/custom/Header";
 import Dashboard from "@/pages/Dashboard";
 import CodingPage from "@/pages/CodingPage";
 import AptitudePage from "@/pages/AptitudePage";
 import CommunicationPage from "@/pages/CommunicationPage";
-import ProfilePage from "@/pages/ProfilePage";
-import OnboardingPage from "@/pages/OnboardingPage";
+import ProfileAnalyticsPage from "@/pages/ProfileAnalyticsPage";
+import SignUpPage from "@/pages/SignUpPage";
+import SignInPage from "@/pages/SignInPage";
 import { Toaster } from "@/components/ui/sonner";
-import { useUser } from "@/context/UserContext";
 
 function AppLayout() {
   const location = useLocation();
-  const { user, loading } = useUser();
-  const isOnboarding = location.pathname === "/onboarding";
-
-  // Show nothing while checking localStorage
-  if (loading) return null;
-
-  // Not logged in and not on onboarding → show onboarding
-  if (!user && !isOnboarding) {
-    return (
-      <div className="min-h-screen bg-[#050505]">
-        <OnboardingPage />
-        <Toaster position="bottom-right" theme="dark" />
-      </div>
-    );
-  }
+  const isAuthPage = location.pathname.startsWith("/sign-up") || location.pathname.startsWith("/sign-in");
 
   return (
     <div className="min-h-screen bg-[#050505]">
-      {!isOnboarding && <Header />}
-      <main className={isOnboarding ? "" : "pt-20"}>
+      {!isAuthPage && <Header />}
+      <main className={isAuthPage ? "" : "pt-20"}>
         <Routes>
-          <Route path="/onboarding" element={<OnboardingPage />} />
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/coding" element={<CodingPage />} />
-          <Route path="/aptitude" element={<AptitudePage />} />
-          <Route path="/communication" element={<CommunicationPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
+          {/* Public / Auth Routes */}
+          <Route path="/sign-in/*" element={<SignInPage />} />
+          <Route path="/sign-up/*" element={<SignUpPage />} />
+
+          {/* Protected Routes */}
+          <Route path="/" element={
+            <SignedIn><Dashboard /></SignedIn>
+          } />
+          <Route path="/coding" element={
+            <SignedIn><CodingPage /></SignedIn>
+          } />
+          <Route path="/aptitude" element={
+            <SignedIn><AptitudePage /></SignedIn>
+          } />
+          <Route path="/communication" element={
+            <SignedIn><CommunicationPage /></SignedIn>
+          } />
+          <Route path="/profile" element={
+            <SignedIn><ProfileAnalyticsPage /></SignedIn>
+          } />
+
+          {/* Fallbacks */}
+          <Route path="*" element={
+            <SignedOut><Navigate to="/sign-in" replace /></SignedOut>
+          } />
         </Routes>
+
+        {/* Catch-all redirect for standard unauthenticated visits to protected root */}
+        <SignedOut>
+          {(!isAuthPage) && <Navigate to="/sign-in" replace />}
+        </SignedOut>
+
       </main>
       <Toaster position="bottom-right" theme="dark" />
     </div>

@@ -1,16 +1,18 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import Editor from "@monaco-editor/react";
-import { Play, Loader2, Sparkles, ChevronDown, Terminal, RotateCcw, Search, Menu, X, Code2, Gamepad2 } from "lucide-react";
+import { Play, Loader2, Sparkles, ChevronDown, Terminal, RotateCcw, Search, Menu, X, Code2, Gamepad2, Send, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { dsaTopics, languages, defaultCode } from "@/data/aptitudeData";
 import axios from "axios";
 import { toast } from "sonner";
+import { useUser } from "@clerk/clerk-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export default function CodingPage() {
+  const { user } = useUser();
   const [selectedLang, setSelectedLang] = useState(languages[0]);
   const [code, setCode] = useState(defaultCode[languages[0].id]);
   const [stdin, setStdin] = useState("");
@@ -18,7 +20,17 @@ export default function CodingPage() {
   const [evaluation, setEvaluation] = useState(null);
   const [running, setRunning] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [showLangMenu, setShowLangMenu] = useState(false);
+  const [activeTab, setActiveTab] = useState("terminal");
+
+  // Chatbot State
+  const [chatMessages, setChatMessages] = useState([
+    { role: "assistant", text: "Hi! I'm your AI coding assistant. Ask me anything about your code, debugging, or optimization!" }
+  ]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatScrollRef = useRef(null);
 
   // DSA Topics
   const [selectedTopicId, setSelectedTopicId] = useState(dsaTopics[0].id);
@@ -28,6 +40,28 @@ export default function CodingPage() {
 
   // Playground Mode
   const [playgroundMode, setPlaygroundMode] = useState(false);
+
+  // Resizable Terminal
+  const [terminalHeight, setTerminalHeight] = useState(280);
+
+  const handleDragStart = useCallback((e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = terminalHeight;
+
+    const onMouseMove = (moveEvent) => {
+      const delta = startY - moveEvent.clientY;
+      setTerminalHeight(Math.max(100, Math.min(800, startHeight + delta)));
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, [terminalHeight]);
 
   const selectedQuestion = useMemo(() => {
     for (const t of dsaTopics) {
@@ -68,6 +102,7 @@ export default function CodingPage() {
 
   const runCode = async () => {
     setRunning(true);
+    setActiveTab("terminal");
     setOutput("");
     try {
       const res = await axios.post(`${API}/code/execute`, {
@@ -122,9 +157,11 @@ export default function CodingPage() {
 
   const evaluateCode = async () => {
     setEvaluating(true);
+    setActiveTab("evaluation");
     setEvaluation(null);
     try {
       const res = await axios.post(`${API}/code/evaluate`, {
+        user_id: user?.id || "default",
         code,
         language: selectedLang.name,
         problem_statement: playgroundMode ? "General code evaluation - Playground mode" : selectedQuestion.statement,
@@ -134,13 +171,13 @@ export default function CodingPage() {
       if (typeof evalText === "string") {
         try {
           let cleaned = evalText;
-          const jsonBlockMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+          const jsonBlockMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
           if (jsonBlockMatch) cleaned = jsonBlockMatch[1];
           const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
           if (jsonMatch) cleaned = jsonMatch[0];
           setEvaluation(JSON.parse(cleaned.trim()));
         } catch {
-          setEvaluation({ raw: evalText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim() });
+          setEvaluation({ raw: evalText.replace(/```(?:json)?\n?/gi, '').replace(/```\n?/g, '').trim() });
         }
       } else {
         setEvaluation(evalText);
@@ -152,6 +189,74 @@ export default function CodingPage() {
     }
     setEvaluating(false);
   };
+
+  const submitCode = async () => {
+    setSubmitting(true);
+    setActiveTab("evaluation");
+    setEvaluation(null);
+    try {
+      const res = await axios.post(`${API}/code/evaluate`, {
+        user_id: user?.id || "default",
+        code,
+        language: selectedLang.name,
+        problem_statement: playgroundMode ? "General code evaluation - Playground mode" : selectedQuestion.statement,
+        expected_behavior: playgroundMode ? "Evaluate code quality" : `Expected output: ${selectedQuestion.sampleOutput}`,
+      });
+      const evalText = res.data.evaluation;
+      if (typeof evalText === "string") {
+        try {
+          let cleaned = evalText;
+          const jsonBlockMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
+          if (jsonBlockMatch) cleaned = jsonBlockMatch[1];
+          const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+          if (jsonMatch) cleaned = jsonMatch[0];
+          setEvaluation(JSON.parse(cleaned.trim()));
+        } catch {
+          setEvaluation({ raw: evalText.replace(/```(?:json)?\n?/gi, '').replace(/```\n?/g, '').trim() });
+        }
+      } else {
+        setEvaluation(evalText);
+      }
+      await axios.post(`${API}/progress/update`, { action: "code_submit", xp_earned: 50 });
+      toast.success("Code Submitted Successfully! +50 XP");
+    } catch (e) {
+      setEvaluation({ raw: "Error: " + (e.response?.data?.detail || e.message) });
+    }
+    setSubmitting(false);
+  };
+
+  const handleSendMessage = async (e) => {
+    e?.preventDefault();
+    if (!chatInput.trim() || chatLoading) return;
+
+    const userMessage = chatInput.trim();
+    setChatMessages(prev => [...prev, { role: "user", text: userMessage }]);
+    setChatInput("");
+    setChatLoading(true);
+
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+
+    try {
+      const res = await axios.post(`${API}/chat`, {
+        message: userMessage,
+        context: `Current Language: ${selectedLang.name}\nCurrent Code:\n${code}\nProblem Statement:\n${playgroundMode ? "Playground Mode" : selectedQuestion.statement}`,
+        history: chatMessages.map(m => ({ role: m.role, text: m.text }))
+      });
+      setChatMessages(prev => [...prev, { role: "assistant", text: res.data.reply }]);
+    } catch (e) {
+      toast.error("AI chat failed.");
+      setChatMessages(prev => [...prev, { role: "assistant", text: "Sorry, I ran into an error processing that request." }]);
+    }
+    setChatLoading(false);
+  };
+
+  useEffect(() => {
+    if (activeTab === "chat" && chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatMessages, activeTab]);
 
   return (
     <div data-testid="coding-page" className="h-[calc(100vh-80px)] flex overflow-hidden">
@@ -242,8 +347,8 @@ export default function CodingPage() {
                 <div className="flex items-center gap-2 mb-3">
                   <h3 className="text-base font-bold" style={{ fontFamily: 'Outfit' }}>{selectedQuestion.title}</h3>
                   <span className={`text-[10px] font-accent font-bold px-2 py-0.5 rounded-full border ${selectedQuestion.difficulty === "Easy" ? "border-[#00FF94]/30 text-[#00FF94]" :
-                      selectedQuestion.difficulty === "Medium" ? "border-[#FFD600]/30 text-[#FFD600]" :
-                        "border-[#FF003C]/30 text-[#FF003C]"
+                    selectedQuestion.difficulty === "Medium" ? "border-[#FFD600]/30 text-[#FFD600]" :
+                      "border-[#FF003C]/30 text-[#FF003C]"
                     }`}>{selectedQuestion.difficulty}</span>
                 </div>
                 <p className="text-xs text-zinc-300 mb-4 leading-relaxed">{selectedQuestion.statement}</p>
@@ -347,6 +452,10 @@ export default function CodingPage() {
                 className="bg-[#00FF94] text-black font-bold text-[10px] uppercase tracking-wider hover:bg-[#00FF94]/90 hover:shadow-[0_0_15px_rgba(0,255,148,0.3)] disabled:opacity-50 h-7 px-3">
                 {running ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Play className="w-3.5 h-3.5 mr-1" />} Run
               </Button>
+              <Button data-testid="submit-code-btn" onClick={submitCode} disabled={submitting} size="sm"
+                className="bg-[#7000FF] text-white font-bold text-[10px] uppercase tracking-wider hover:bg-[#7000FF]/90 hover:shadow-[0_0_15px_rgba(112,0,255,0.3)] disabled:opacity-50 h-7 px-3">
+                {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Send className="w-3.5 h-3.5 mr-1" />} Submit
+              </Button>
               <Button data-testid="ai-evaluate-btn" onClick={evaluateCode} disabled={evaluating} size="sm"
                 className="bg-[#00F0FF] text-black font-bold text-[10px] uppercase tracking-wider hover:bg-[#00F0FF]/90 hover:shadow-[0_0_15px_rgba(0,240,255,0.3)] disabled:opacity-50 h-7 px-3">
                 {evaluating ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Sparkles className="w-3.5 h-3.5 mr-1" />} Evaluate
@@ -375,92 +484,146 @@ export default function CodingPage() {
             />
           </div>
 
-          {/* Input (stdin) */}
-          <div className="border-t border-white/5 bg-[#0A0A0A] px-3 py-2">
-            <p className="text-[10px] text-zinc-600 mb-1 uppercase tracking-wider font-semibold">Input (stdin)</p>
-            <Textarea
-              data-testid="stdin-input"
-              value={stdin}
-              onChange={e => setStdin(e.target.value)}
-              placeholder="Enter input..."
-              className="h-12 bg-black/50 border-white/10 text-xs font-mono resize-none"
-            />
-          </div>
+          {/* Resizer */}
+          <div
+            className="h-1.5 bg-white/5 hover:bg-[#00F0FF]/50 cursor-row-resize transition-colors w-full z-10"
+            onMouseDown={handleDragStart}
+          />
 
-          {/* BELOW COMPILER: Terminal Output + AI Evaluation */}
-          <div className="border-t border-white/5 bg-[#080808] max-h-[280px] flex flex-col">
-            {/* Tabs */}
-            <div className="flex border-b border-white/5 flex-shrink-0">
-              <button data-testid="tab-output" onClick={() => { }}
-                className="px-4 py-2 text-xs font-medium text-[#00FF94] border-b-2 border-[#00FF94] flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5" /> Terminal
-              </button>
-              {evaluation && (
-                <button data-testid="tab-evaluation" className="px-4 py-2 text-xs font-medium text-[#00F0FF] flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5" /> AI Evaluation
-                </button>
-              )}
+          {/* BOTTOM PANEL: Input + Terminal */}
+          <div className="flex flex-col bg-[#0A0A0A]" style={{ height: terminalHeight }}>
+            {/* Input (stdin) */}
+            <div className="border-t border-white/5 px-3 py-2 flex-shrink-0">
+              <p className="text-[10px] text-[#00F0FF] mb-1 uppercase tracking-wider font-semibold">Input (stdin)</p>
+              <Textarea
+                data-testid="stdin-input"
+                value={stdin}
+                onChange={e => setStdin(e.target.value)}
+                placeholder="Enter input..."
+                className="h-12 bg-[#1A1A1A] border-white/20 text-xs text-white font-mono resize-none focus-visible:ring-1 focus-visible:ring-[#00F0FF] placeholder:text-zinc-500"
+              />
             </div>
-            <ScrollArea className="flex-1">
-              <div className="p-3">
-                {/* Terminal Output */}
-                <div data-testid="code-output">
-                  {running ? (
-                    <div className="flex items-center gap-2 text-zinc-400">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-xs font-mono">Compiling & Executing...</span>
-                    </div>
-                  ) : output ? (
-                    <div className="terminal-output">
-                      <div className="terminal-header">
-                        <span className="terminal-dot bg-[#FF003C]" />
-                        <span className="terminal-dot bg-[#FFD600]" />
-                        <span className="terminal-dot bg-[#00FF94]" />
-                        <span className="text-[10px] text-zinc-600 ml-2 font-mono">elevate-terminal</span>
-                      </div>
-                      {output.split("\n").map((line, i) => (
-                        <div key={i} className="terminal-line">
-                          <span className={
-                            line.startsWith("Error:") || line.startsWith("STDERR:") ? "error-text" :
-                              line.startsWith("Status: Success") ? "success-text" :
-                                line.startsWith("Status:") ? "error-text" :
-                                  line.startsWith("Output:") ? "info-text" :
-                                    line.startsWith("Running") ? "success-text" :
-                                      "output-text"
-                          }>
-                            {line}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-zinc-500 font-mono">Run your code to see terminal output</p>
-                  )}
-                </div>
 
-                {/* AI Evaluation (shown below terminal when available) */}
-                {evaluation && (
-                  <div className="mt-4 pt-4 border-t border-white/5" data-testid="code-evaluation">
-                    {evaluating ? (
-                      <div className="flex items-center gap-2 text-zinc-400">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span className="text-xs">Analyzing...</span>
-                      </div>
-                    ) : evaluation.raw ? (
-                      <pre className="text-xs text-zinc-300 whitespace-pre-wrap">{evaluation.raw}</pre>
-                    ) : (
-                      <EvalDisplay data={evaluation} />
-                    )}
-                  </div>
-                )}
-                {evaluating && !evaluation && (
-                  <div className="mt-4 pt-4 border-t border-white/5 flex items-center gap-2 text-zinc-400">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="text-xs">Analyzing your code...</span>
-                  </div>
+            {/* BELOW COMPILER: Terminal Output + AI Evaluation */}
+            <div className="border-t border-white/5 bg-[#080808] flex-1 flex flex-col min-h-0">
+              {/* Tabs */}
+              <div className="flex border-b border-white/5 flex-shrink-0">
+                <button data-testid="tab-output" onClick={() => setActiveTab("terminal")}
+                  className={`px-4 py-2 text-xs font-medium flex items-center gap-1.5 transition-colors ${activeTab === "terminal" ? "text-[#00FF94] border-b-2 border-[#00FF94]" : "text-zinc-500 hover:text-zinc-400"
+                    }`}>
+                  <Terminal className="w-3.5 h-3.5" /> Terminal
+                </button>
+                {evaluation ? (
+                  <button data-testid="tab-evaluation" onClick={() => setActiveTab("evaluation")}
+                    className={`px-4 py-2 text-xs font-medium flex items-center gap-1.5 transition-colors ${activeTab === "evaluation" ? "text-[#00F0FF] border-b-2 border-[#00F0FF]" : "text-zinc-500 hover:text-zinc-400"
+                      }`}>
+                    <Sparkles className="w-3.5 h-3.5" /> AI Evaluation
+                  </button>
+                ) : (
+                  <button data-testid="tab-evaluation-disabled" className="px-4 py-2 text-xs font-medium text-zinc-700 flex items-center gap-1.5 cursor-not-allowed">
+                    <Sparkles className="w-3.5 h-3.5" /> AI Evaluation
+                  </button>
                 )}
               </div>
-            </ScrollArea>
+              <ScrollArea className="flex-1">
+                <div className="p-3">
+                  {/* Terminal Output */}
+                  {activeTab === "terminal" && (
+                    <div data-testid="code-output">
+                      {running ? (
+                        <div className="flex items-center gap-2 text-zinc-400">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span className="text-xs font-mono">Compiling & Executing...</span>
+                        </div>
+                      ) : output ? (
+                        <div className="terminal-output">
+                          <div className="terminal-header">
+                            <span className="terminal-dot bg-[#FF003C]" />
+                            <span className="terminal-dot bg-[#FFD600]" />
+                            <span className="terminal-dot bg-[#00FF94]" />
+                            <span className="text-[10px] text-zinc-600 ml-2 font-mono">elevate-terminal</span>
+                          </div>
+                          {output.split("\n").map((line, i) => (
+                            <div key={i} className="terminal-line">
+                              <span className={
+                                line.startsWith("Error:") || line.startsWith("STDERR:") ? "error-text" :
+                                  line.startsWith("Status: Success") ? "success-text" :
+                                    line.startsWith("Status:") ? "error-text" :
+                                      line.startsWith("Output:") ? "info-text" :
+                                        line.startsWith("Running") ? "success-text" :
+                                          "output-text"
+                              }>
+                                {line}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-zinc-500 font-mono">Run your code to see terminal output</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* AI Evaluation (shown completely distinct from Terminal view) */}
+                  {activeTab === "evaluation" && (
+                    <div data-testid="code-evaluation" className="mt-2">
+                      {evaluating ? (
+                        <div className="flex items-center gap-2 text-zinc-400">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span className="text-xs">Analyzing your code...</span>
+                        </div>
+                      ) : evaluation ? (
+                        evaluation.raw ? (
+                          <pre className="text-xs text-zinc-300 whitespace-pre-wrap">{evaluation.raw}</pre>
+                        ) : (
+                          <EvalDisplay data={evaluation} />
+                        )
+                      ) : null}
+                    </div>
+                  )}
+
+                  {/* CHATBOT UI */}
+                  {activeTab === "chat" && (
+                    <div className="flex flex-col h-full h-[300px]" data-testid="code-chatbot">
+                      <div className="flex-1 overflow-y-auto pr-2 space-y-3 pb-4" ref={chatScrollRef}>
+                        {chatMessages.map((msg, i) => (
+                          <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                            <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${msg.role === "user" ? "bg-[#00F0FF]/10 text-[#00F0FF] border border-[#00F0FF]/20" : "bg-white/5 text-zinc-200 border border-white/10"}`}>
+                              <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+                            </div>
+                          </div>
+                        ))}
+                        {chatLoading && (
+                          <div className="flex justify-start">
+                            <div className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-zinc-400 flex items-center gap-2">
+                              <Loader2 className="w-4 h-4 animate-spin" /> Thinking...
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <form onSubmit={handleSendMessage} className="mt-auto relative z-20 flex gap-2 border-t border-white/5 pt-3">
+                        <input
+                          type="text"
+                          value={chatInput}
+                          onChange={e => setChatInput(e.target.value)}
+                          placeholder="Ask about your code..."
+                          className="flex-1 bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#00F0FF]/50 transition-colors"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!chatInput.trim() || chatLoading}
+                          className="px-4 py-2 bg-[#00F0FF]/10 hover:bg-[#00F0FF]/20 text-[#00F0FF] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Send
+                        </button>
+                      </form>
+                    </div>
+                  )}
+
+                </div>
+              </ScrollArea>
+            </div>
           </div>
         </div>
       </div>
@@ -471,10 +634,10 @@ export default function CodingPage() {
 function EvalDisplay({ data }) {
   const scores = data.scores || {};
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {scores && Object.keys(scores).length > 0 && (
-        <div>
-          <h4 className="text-[10px] uppercase tracking-wider text-zinc-600 mb-2 font-semibold">Scores</h4>
+        <div className="bg-white/5 rounded-lg p-3">
+          <h4 className="text-[11px] uppercase tracking-wider text-[#00F0FF] mb-3 font-bold">Scores</h4>
           <div className="flex gap-3">
             <ScoreBox label="Logic" score={scores.logic} color="#00F0FF" />
             <ScoreBox label="Optimize" score={scores.optimization} color="#7000FF" />
@@ -486,18 +649,18 @@ function EvalDisplay({ data }) {
       {data.time_complexity && <Section title="Time Complexity" content={data.time_complexity} />}
       {data.space_complexity && <Section title="Space Complexity" content={data.space_complexity} />}
       {data.edge_cases?.length > 0 && (
-        <div>
-          <h4 className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1 font-semibold">Edge Cases</h4>
-          <ul className="space-y-0.5">
-            {data.edge_cases.map((e, i) => <li key={i} className="text-xs text-zinc-300">! {e}</li>)}
+        <div className="bg-[#FF003C]/10 rounded-lg p-3">
+          <h4 className="text-[11px] uppercase tracking-wider text-[#FF003C] mb-2 font-bold">Edge Cases</h4>
+          <ul className="space-y-1">
+            {data.edge_cases.map((e, i) => <li key={i} className="text-sm text-zinc-200">! {e}</li>)}
           </ul>
         </div>
       )}
       {data.improvements?.length > 0 && (
-        <div>
-          <h4 className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1 font-semibold">Optimization Suggestions</h4>
-          <ul className="space-y-0.5">
-            {data.improvements.map((imp, i) => <li key={i} className="text-xs text-zinc-300">+ {imp}</li>)}
+        <div className="bg-[#00FF94]/5 rounded-lg p-3">
+          <h4 className="text-[11px] uppercase tracking-wider text-[#00FF94] mb-2 font-bold">Optimization Suggestions</h4>
+          <ul className="space-y-1">
+            {data.improvements.map((imp, i) => <li key={i} className="text-sm text-zinc-200">+ {imp}</li>)}
           </ul>
         </div>
       )}
@@ -518,9 +681,9 @@ function ScoreBox({ label, score, color }) {
 
 function Section({ title, content }) {
   return (
-    <div>
-      <h4 className="text-[10px] uppercase tracking-wider text-zinc-600 mb-0.5 font-semibold">{title}</h4>
-      <p className="text-xs text-zinc-300 leading-relaxed">{content}</p>
+    <div className="bg-black/30 rounded-lg p-3 border border-white/5">
+      <h4 className="text-[11px] uppercase tracking-wider text-[#00F0FF] mb-1.5 font-bold">{title}</h4>
+      <p className="text-sm text-zinc-100 leading-relaxed font-medium">{content}</p>
     </div>
   );
 }

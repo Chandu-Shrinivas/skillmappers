@@ -1,53 +1,8 @@
-import { useState } from "react";
-import { useSignIn } from "@clerk/clerk-react";
-import { useNavigate } from "react-router-dom";
-import { Zap, Mail, Lock, Eye, EyeOff, ArrowRight, Loader2, Github, Chrome } from "lucide-react";
+import { SignIn } from "@clerk/clerk-react";
+import { dark } from "@clerk/themes";
+import { Zap } from "lucide-react";
 
 export default function SignInPage() {
-    const { signIn, isLoaded, setActive } = useSignIn();
-    const navigate = useNavigate();
-
-    const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
-    const [showPassword, setShowPassword] = useState(false);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState("");
-
-    const handleSignIn = async (e) => {
-        e.preventDefault();
-        if (!isLoaded) return;
-        setLoading(true);
-        setError("");
-        try {
-            const result = await signIn.create({
-                identifier: email,
-                password,
-            });
-            if (result.status === "complete") {
-                await setActive({ session: result.createdSessionId });
-                navigate("/");
-            } else {
-                console.log(result);
-            }
-        } catch (err) {
-            setError(err.errors?.[0]?.longMessage || err.message || "Sign in failed");
-        }
-        setLoading(false);
-    };
-
-    const handleOAuth = async (provider) => {
-        if (!isLoaded) return;
-        try {
-            await signIn.authenticateWithRedirect({
-                strategy: `oauth_${provider}`,
-                redirectUrl: "/sign-in/sso-callback",
-                redirectUrlComplete: "/",
-            });
-        } catch (err) {
-            setError(err.errors?.[0]?.longMessage || err.message || "OAuth failed");
-        }
-    };
-
     return (
         <div className="min-h-screen flex items-center justify-center relative overflow-hidden" style={{ background: "#050505" }}>
             {/* Animated background effects */}
@@ -82,84 +37,51 @@ export default function SignInPage() {
                 ))}
             </div>
 
-            {/* Sign In Card */}
-            <div className="relative z-10 w-full max-w-md mx-4 animate-slide-up">
+            {/* Sign In Card Area */}
+            <div className="relative z-10 w-full max-w-md mx-4 animate-slide-up flex flex-col items-center">
                 {/* Logo */}
                 <div className="flex items-center justify-center gap-3 mb-8">
                     <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#00F0FF] to-[#7000FF] flex items-center justify-center shadow-lg"
                         style={{ boxShadow: "0 0 30px rgba(0, 240, 255, 0.3)" }}>
                         <Zap className="w-6 h-6 text-black" />
                     </div>
-                    <h1 className="text-3xl font-bold tracking-tight" style={{ fontFamily: "Outfit" }}>
+                    <h1 className="text-3xl font-bold tracking-tight text-white" style={{ fontFamily: "Outfit" }}>
                         ELEVATE
                     </h1>
                 </div>
 
-                {/* Card */}
-                <div className="rounded-2xl border border-white/[0.08] p-8"
-                    style={{ background: "rgba(10, 10, 10, 0.8)", backdropFilter: "blur(20px)", boxShadow: "0 0 40px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05)" }}>
-
-                    <div className="text-center mb-6">
-                        <h2 className="text-xl font-bold mb-1" style={{ fontFamily: "Outfit" }}>Welcome back</h2>
-                        <p className="text-sm text-zinc-500">Sign in to continue your preparation</p>
-                    </div>
-
-                    {/* OAuth Buttons */}
-                    <div className="grid grid-cols-2 gap-3 mb-6">
-                        <button onClick={() => handleOAuth("google")} type="button"
-                            className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-white/10 bg-white/[0.03] text-sm font-medium text-zinc-300 hover:bg-white/[0.06] hover:border-white/20 transition-all duration-200">
-                            <Chrome className="w-4 h-4" /> Google
-                        </button>
-                        <button onClick={() => handleOAuth("github")} type="button"
-                            className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-white/10 bg-white/[0.03] text-sm font-medium text-zinc-300 hover:bg-white/[0.06] hover:border-white/20 transition-all duration-200">
-                            <Github className="w-4 h-4" /> GitHub
-                        </button>
-                    </div>
-
-                    {/* Divider */}
-                    <div className="flex items-center gap-3 mb-6">
-                        <div className="flex-1 h-px bg-white/10" />
-                        <span className="text-xs text-zinc-600 uppercase tracking-widest font-medium">or</span>
-                        <div className="flex-1 h-px bg-white/10" />
-                    </div>
-
-                    {/* Form */}
-                    <form onSubmit={handleSignIn} className="space-y-4">
-                        <div className="relative">
-                            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-600" />
-                            <input id="signin-email" type="email" placeholder="Email address" value={email}
-                                onChange={(e) => setEmail(e.target.value)} required
-                                className="w-full bg-white/[0.03] border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-[#00F0FF]/50 focus:ring-1 focus:ring-[#00F0FF]/20 transition-all duration-200" />
-                        </div>
-
-                        <div className="relative">
-                            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-600" />
-                            <input id="signin-password" type={showPassword ? "text" : "password"} placeholder="Password" value={password}
-                                onChange={(e) => setPassword(e.target.value)} required
-                                className="w-full bg-white/[0.03] border border-white/10 rounded-xl pl-10 pr-12 py-2.5 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-[#00F0FF]/50 focus:ring-1 focus:ring-[#00F0FF]/20 transition-all duration-200" />
-                            <button type="button" onClick={() => setShowPassword(!showPassword)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 transition-colors">
-                                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                            </button>
-                        </div>
-
-                        {error && (
-                            <div className="flex items-start gap-2 px-3 py-2 rounded-xl bg-[#FF003C]/10 border border-[#FF003C]/20">
-                                <span className="text-xs text-[#FF003C] leading-relaxed">{error}</span>
-                            </div>
-                        )}
-
-                        <button type="submit" disabled={loading}
-                            className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm text-black transition-all duration-300 disabled:opacity-50"
-                            style={{ background: "linear-gradient(135deg, #00F0FF, #7000FF)", boxShadow: "0 0 20px rgba(0, 240, 255, 0.3)" }}>
-                            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <>Sign In <ArrowRight className="w-4 h-4" /></>}
-                        </button>
-                    </form>
-
-                    <p className="text-center text-xs text-zinc-600 mt-6">
-                        Don't have an account?{" "}
-                        <a href="/sign-up" className="text-[#00F0FF] hover:underline font-medium">Sign up</a>
-                    </p>
+                <div className="w-full relative shadow-2xl" style={{ boxShadow: "0 0 40px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05)" }}>
+                    <SignIn
+                        routing="path"
+                        path="/sign-in"
+                        signUpUrl="/sign-up"
+                        forceRedirectUrl="/"
+                        appearance={{
+                            baseTheme: dark,
+                            variables: {
+                                colorPrimary: "#00F0FF",
+                                colorBackground: "rgba(10, 10, 10, 0.95)", // Slightly more opaque for readability
+                                colorText: "#ffffff",
+                                colorInputBackground: "rgba(255, 255, 255, 0.03)",
+                                colorInputText: "#ffffff",
+                                colorDanger: "#FF003C",
+                                colorSuccess: "#00FF94",
+                                fontFamily: "Manrope, sans-serif",
+                                borderRadius: "1rem"
+                            },
+                            elements: {
+                                card: "bg-transparent border border-white/10 shadow-none",
+                                formButtonPrimary: "font-semibold text-black bg-gradient-to-r from-[#00F0FF] to-[#7000FF] hover:opacity-90 transition-all",
+                                footerActionLink: "text-[#00F0FF] hover:text-[#00F0FF] hover:opacity-80",
+                                cardBox: "shadow-none",
+                                headerTitle: "font-bold text-xl",
+                                socialButtonsBlockButton: "border-white/10 bg-white/[0.03] hover:bg-white/[0.06] text-white",
+                                dividerText: "text-zinc-500",
+                                dividerLine: "bg-white/10",
+                                formFieldInput: "focus:ring-1 focus:ring-[#00F0FF]/50 border-white/10"
+                            }
+                        }}
+                    />
                 </div>
 
                 {/* Footer */}

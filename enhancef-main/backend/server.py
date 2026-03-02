@@ -15,7 +15,7 @@ import cv2
 from fastapi.responses import StreamingResponse
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / '.env', override=True)
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -32,6 +32,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 # ---------- Models ----------
 
 class CodeEvalRequest(BaseModel):
+    user_id: str = "default"
     code: str
     language: str
     problem_statement: str = ""
@@ -43,52 +44,52 @@ class CodeExecRequest(BaseModel):
     stdin: str = ""
 
 class QuizSubmitRequest(BaseModel):
+    user_id: str = "default"
     topic: str
     answers: dict  # {question_index: selected_option}
     total_questions: int
 
 class InterviewEvalRequest(BaseModel):
+    user_id: str = "default"
     question: str
     transcript: str
     filler_words: int = 0
     speech_speed: str = "normal"
+
+class ChatRequest(BaseModel):
+    message: str
+    context: str
+    history: List[dict]
 
 class ProgressUpdate(BaseModel):
     action: str  # "quiz_complete", "interview_complete", "code_submit"
     xp_earned: int = 0
     details: dict = {}
 
-class UserSyncRequest(BaseModel):
-    name: str
-    email: str
-
 # ---------- Helpers ----------
+
+import json
+import re
+
+def extract_json(text: str) -> dict:
+    match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', text, re.IGNORECASE)
+    if match: text = match.group(1)
+    match2 = re.search(r'\{[\s\S]*\}', text)
+    if match2: text = match2.group(0)
+    try: return json.loads(text)
+    except: return {}
 
 async def get_ai_response(system_msg: str, user_msg: str) -> str:
     try:
-        genai.configure(api_key=os.environ.get('GEMINI_API_KEY', EMERGENT_LLM_KEY))
+        from dotenv import dotenv_values
+        config = dotenv_values(ROOT_DIR / '.env')
+        genai.configure(api_key=config.get('GEMINI_API_KEY', EMERGENT_LLM_KEY))
         model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=system_msg)
         response = await model.generate_content_async(user_msg)
         return response.text
     except Exception as e:
         logger.error(f"AI Error: {e}")
         raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
-
-# --- User Sync ---
-@api_router.post("/user/sync")
-async def user_sync(req: UserSyncRequest):
-    existing = await db.users.find_one({"email": req.email}, {"_id": 0})
-    if existing:
-        return {"userId": existing["userId"], "name": existing["name"], "email": existing["email"]}
-    user = {
-        "userId": str(uuid.uuid4()),
-        "name": req.name,
-        "email": req.email,
-        "createdAt": datetime.now(timezone.utc).isoformat()
-    }
-    await db.users.insert_one(user)
-    return {"userId": user["userId"], "name": user["name"], "email": user["email"]}
-
 
 async def get_or_create_progress():
     progress = await db.progress.find_one({"user": "default"}, {"_id": 0})
@@ -137,17 +138,181 @@ async def update_progress(req: ProgressUpdate):
         updates["codes_submitted"] = progress["codes_submitted"] + 1
 
     # Streak logic
-    from datetime import timedelta
-    last = datetime.fromisoformat(progress["last_active"])
-    now = datetime.now(timezone.utc)
-    if (now - last).days <= 1:
-        updates["streak"] = progress["streak"] + 1
-    elif (now - last).days > 1:
+    last_dt = datetime.fromisoformat(progress["last_active"])
+    now_dt = datetime.now(timezone.utc)
+    last_date = last_dt.date()
+    now_date = now_dt.date()
+
+    updates["streak"] = progress.get("streak", 0)
+    if now_date > last_date:
+        if (now_date - last_date).days == 1:
+            updates["streak"] += 1
+        else:
+            updates["streak"] = 1
+    elif updates["streak"] == 0:
         updates["streak"] = 1
 
     await db.progress.update_one({"user": "default"}, {"$set": updates})
     updated = await db.progress.find_one({"user": "default"}, {"_id": 0})
     return updated
+
+# --- User Profile & Analytics ---
+
+@api_router.get("/user/profile/{user_id}")
+async def get_user_profile(user_id: str):
+    user = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not user:
+        # Mock payload for currently non-synced clerk users
+        user = {"name": "Guest User", "email": "guest@elevate.com", "createdAt": datetime.now(timezone.utc).isoformat()}
+    
+    coding_count = await db.code_submissions.count_documents({"userId": user_id})
+    aptitude_count = await db.quiz_attempts.count_documents({"userId": user_id})
+    interview_count = await db.interviews.count_documents({"userId": user_id})
+    
+    # Calculate overall skill score (simple avg of all tests)
+    coding_cursor = db.code_submissions.find({"userId": user_id}).sort("timestamp", -1).limit(5)
+    coding_scores = [doc.get("score", 0) for doc in await coding_cursor.to_list(length=5)]
+    avg_coding = sum(coding_scores) / len(coding_scores) if coding_scores else 0
+
+    apt_cursor = db.quiz_attempts.find({"userId": user_id}).sort("timestamp", -1).limit(5)
+    apt_scores = [doc.get("score", 0) for doc in await apt_cursor.to_list(length=5)]
+    avg_apt = sum(apt_scores) / len(apt_scores) if apt_scores else 0
+
+    int_cursor = db.interviews.find({"userId": user_id}).sort("timestamp", -1).limit(5)
+    int_docs = await int_cursor.to_list(length=5)
+    int_scores = [((d.get("clarityScore", 0) + d.get("confidenceScore", 0)) / 2) for d in int_docs]
+    avg_int = sum(int_scores) / len(int_scores) if int_scores else 0
+
+    overall = (avg_coding + avg_apt + avg_int) / 3 if (avg_coding or avg_apt or avg_int) else 0
+
+    return {
+        "name": user.get("name", "Guest User"),
+        "email": user.get("email", ""),
+        "joinedAt": user.get("createdAt", datetime.now(timezone.utc).isoformat()),
+        "totalCodingAttempts": coding_count,
+        "totalAptitudeAttempts": aptitude_count,
+        "totalInterviewAttempts": interview_count,
+        "overallSkillScore": round(overall, 1)
+    }
+
+class SkillEngine:
+    @staticmethod
+    def detect_weakest_skill(coding: float, aptitude: float, communication: float):
+        scores = {"coding": coding, "aptitude": aptitude, "communication": communication}
+        weakest = min(scores, key=scores.get)
+        
+        recommendations = {
+            "coding": "Your coding scores are lagging. Practice Data Structures and Algorithms in the Coding Arena.",
+            "aptitude": "Your aptitude logic could use a brush-up. Take more quizzes to improve pattern recognition.",
+            "communication": "Your interview scores are lower than average. Practice mock interviews to boost confidence."
+        }
+        
+        return weakest, recommendations[weakest]
+
+@api_router.get("/analytics/{user_id}")
+async def get_analytics(user_id: str):
+    coding_cursor = db.code_submissions.find({"userId": user_id}).sort("timestamp", -1).limit(5)
+    coding_docs = await coding_cursor.to_list(length=5)
+    coding_scores = [doc.get("score", 0) for doc in coding_docs]
+    avg_coding = sum(coding_scores) / len(coding_scores) if coding_scores else 0
+
+    apt_cursor = db.quiz_attempts.find({"userId": user_id}).sort("timestamp", -1).limit(5)
+    apt_docs = await apt_cursor.to_list(length=5)
+    apt_scores = [doc.get("score", 0) for doc in apt_docs]
+    avg_apt = sum(apt_scores) / len(apt_scores) if apt_scores else 0
+
+    int_cursor = db.interviews.find({"userId": user_id}).sort("timestamp", -1).limit(5)
+    int_docs = await int_cursor.to_list(length=5)
+    int_scores = [((d.get("clarityScore", 0) + d.get("confidenceScore", 0)) / 2) for d in int_docs]
+    avg_int = sum(int_scores) / len(int_scores) if int_scores else 0
+    
+    weakest_skill, recommendation = SkillEngine.detect_weakest_skill(avg_coding, avg_apt, avg_int)
+
+    all_recent = []
+    for d in coding_docs: all_recent.append({"module": "coding", "score": d.get("score", 0), "date": d.get("timestamp")})
+    for d in apt_docs: all_recent.append({"module": "aptitude", "score": d.get("score", 0), "date": d.get("timestamp")})
+    for d in int_docs: all_recent.append({"module": "communication", "score": ((d.get("clarityScore", 0) + d.get("confidenceScore", 0)) / 2), "date": d.get("timestamp")})
+        
+    all_recent.sort(key=lambda x: x["date"])
+
+    return {
+        "codingAverage": round(avg_coding, 1),
+        "aptitudeAverage": round(avg_apt, 1),
+        "communicationAverage": round(avg_int, 1),
+        "weakestSkill": weakest_skill,
+        "recommendation": recommendation,
+        "recentPerformance": all_recent[-10:]
+    }
+
+@api_router.get("/analytics/heatmap/{user_id}")
+async def get_analytics_heatmap(user_id: str, module: str = "all"):
+    from collections import defaultdict
+    from datetime import timedelta
+    
+    activity_map = defaultdict(int)
+    one_year_ago = datetime.now(timezone.utc) - timedelta(days=365)
+    query = {"userId": user_id, "timestamp": {"$gte": one_year_ago.isoformat()}}
+
+    # Fetch data based on module filter
+    if module in ["all", "coding"]:
+        async for doc in db.code_submissions.find(query):
+            dt = datetime.fromisoformat(doc["timestamp"]).date().isoformat()
+            activity_map[dt] += 1
+            
+    if module in ["all", "aptitude"]:
+        async for doc in db.quiz_attempts.find(query):
+            dt = datetime.fromisoformat(doc["timestamp"]).date().isoformat()
+            activity_map[dt] += 1
+            
+    if module in ["all", "communication"]:
+        async for doc in db.interviews.find(query):
+            dt = datetime.fromisoformat(doc["timestamp"]).date().isoformat()
+            activity_map[dt] += 1
+            
+    active_dates = sorted(activity_map.keys())
+    
+    # Calculate Streaks
+    current_streak = 0
+    max_streak = 0
+    
+    if active_dates:
+        # Evaluate Max Streak
+        temp_streak = 1
+        for i in range(1, len(active_dates)):
+            d1 = datetime.fromisoformat(active_dates[i-1]).date()
+            d2 = datetime.fromisoformat(active_dates[i]).date()
+            if (d2 - d1).days == 1:
+                temp_streak += 1
+            else:
+                max_streak = max(max_streak, temp_streak)
+                temp_streak = 1
+        max_streak = max(max_streak, temp_streak)
+        
+        # Evaluate Current Streak
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
+        
+        last_active = datetime.fromisoformat(active_dates[-1]).date()
+        if last_active == today or last_active == yesterday:
+            current_streak = 1
+            curr_d = last_active
+            for j in range(len(active_dates)-2, -1, -1):
+                prev_d = datetime.fromisoformat(active_dates[j]).date()
+                if (curr_d - prev_d).days == 1:
+                    current_streak += 1
+                    curr_d = prev_d
+                else:
+                    break
+
+    daily_activity = [{"date": k, "count": v} for k, v in activity_map.items()]
+
+    return {
+        "totalSubmissions": sum(activity_map.values()),
+        "activeDays": len(active_dates),
+        "currentStreak": current_streak,
+        "maxStreak": max_streak,
+        "dailyActivity": daily_activity
+    }
 
 # --- Code Evaluation ---
 @api_router.post("/code/evaluate")
@@ -173,9 +338,13 @@ Respond in structured JSON format:
 }"""
     user_msg = f"Problem: {req.problem_statement}\nExpected: {req.expected_behavior}\nLanguage: {req.language}\nCode:\n```\n{req.code}\n```"
     result = await get_ai_response(system_msg, user_msg)
+    parsed = extract_json(result)
+    score = parsed.get("scores", {}).get("logic", 0)
 
     await db.code_submissions.insert_one({
         "id": str(uuid.uuid4()),
+        "userId": req.user_id,
+        "score": score,
         "code": req.code,
         "language": req.language,
         "problem": req.problem_statement,
@@ -184,6 +353,22 @@ Respond in structured JSON format:
     })
 
     return {"evaluation": result}
+
+# --- Chatbot API ---
+@api_router.post("/chat")
+async def process_chat(req: ChatRequest):
+    system_msg = """You are Elevate AI, an expert coding assistant.
+You are helping the user write, debug, and optimize their code. 
+Be concise, helpful, and provide code examples when relevant.
+Whenever you provide advice, format it nicely."""
+    
+    # Build up the context string based on what the user has currently inputted
+    user_msg = f"Current Context:\n{req.context}\n\nUser Question:\n{req.message}"
+    
+    # Simple direct generation (Optionally can map req.history if complex multi-turn needed, 
+    # but passing concatenated context + question string is sufficient for a basic bot)
+    result = await get_ai_response(system_msg, user_msg)
+    return {"reply": result}
 
 # --- Code Execution (Judge0 proxy) ---
 @api_router.post("/code/execute")
@@ -246,11 +431,14 @@ Respond in JSON:
 
     user_msg = f"Topic: {req.topic}\nScore: {score}/{total}\nWeak areas: User got {total - score} wrong"
     analysis = await get_ai_response(system_msg, user_msg)
+    # Scale score to 10-100 logically for database matching
+    mapped_score = (score / total) * 100 if total > 0 else 0
 
     record = {
         "id": str(uuid.uuid4()),
+        "userId": req.user_id,
         "topic": req.topic,
-        "score": score,
+        "score": mapped_score,
         "total": total,
         "analysis": analysis,
         "timestamp": datetime.now(timezone.utc).isoformat()
@@ -274,11 +462,16 @@ Respond in JSON:
 
     user_msg = f"Question: {req.question}\nTranscript: {req.transcript}\nFiller words detected: {req.filler_words}\nSpeech speed: {req.speech_speed}"
     result = await get_ai_response(system_msg, user_msg)
+    parsed = extract_json(result)
 
     record = {
         "id": str(uuid.uuid4()),
+        "userId": req.user_id,
         "question": req.question,
         "transcript": req.transcript,
+        "grammarScore": getattr(parsed, "grammar_score", 0), # Optional tracking if added to prompt
+        "clarityScore": parsed.get("clarity_score", 0) * 10, # Convert /10 to /100
+        "confidenceScore": parsed.get("confidence_score", 0) * 10, # Convert /10 to /100
         "evaluation": result,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }

@@ -3,16 +3,21 @@ import { Brain, Play, CheckCircle2, XCircle, Loader2, ChevronRight, ArrowLeft, B
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { aptitudeTopics } from "@/data/aptitudeData";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { toast } from "sonner";
+import { useUser } from "@clerk/clerk-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const iconMap = { Calculator, Brain, BookOpen, BarChart3, Clock, Shuffle, Dices, Route, Percent, Scale };
 
 export default function AptitudePage() {
+  const navigate = useNavigate();
+  const { user } = useUser();
   const [view, setView] = useState("topics");
   const [selectedTopic, setSelectedTopic] = useState(null);
+  const [activeQuizTopic, setActiveQuizTopic] = useState("");
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [answers, setAnswers] = useState({});
   const [submitted, setSubmitted] = useState(false);
@@ -31,6 +36,7 @@ export default function AptitudePage() {
 
   const startQuiz = async (quizTopic) => {
     setLoading(true);
+    setActiveQuizTopic(quizTopic);
     setView("quiz");
     setSubmitted(false);
     setAnswers({});
@@ -40,8 +46,12 @@ export default function AptitudePage() {
       let qs = res.data.questions;
       if (typeof qs === "string") {
         try {
-          const cleaned = qs.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-          qs = JSON.parse(cleaned);
+          let cleaned = qs;
+          const jsonBlockMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
+          if (jsonBlockMatch) cleaned = jsonBlockMatch[1];
+          const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
+          if (jsonMatch) cleaned = jsonMatch[0];
+          qs = JSON.parse(cleaned.trim());
         } catch { qs = []; }
       }
       setParsedQuestions(Array.isArray(qs) ? qs : []);
@@ -60,9 +70,10 @@ export default function AptitudePage() {
     setSubmitted(true);
     try {
       const res = await axios.post(`${API}/quiz/submit`, {
-        topic: selectedTopic?.title || "General",
-        answers: { score, ...answers },
-        total_questions: parsedQuestions.length,
+        user_id: user?.id || "default",
+        topic: activeQuizTopic || selectedTopic?.title || "General",
+        answers: { ...answers, score: score }, // Changed 'earnedScore' to 'score' to match local variable
+        total_questions: parsedQuestions.length // Changed 'selectedTopic?.questions?.length || 10' to 'parsedQuestions.length' to match local variable
       });
       setQuizResult(res.data);
       await axios.post(`${API}/progress/update`, { action: "quiz_complete", xp_earned: score * 10 });
@@ -82,9 +93,13 @@ export default function AptitudePage() {
     let data = analysis;
     if (typeof data === "string") {
       try {
-        const cleaned = data.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-        data = JSON.parse(cleaned);
-      } catch {
+        let cleaned = data;
+        const jsonBlockMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
+        if (jsonBlockMatch) cleaned = jsonBlockMatch[1];
+        const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+        if (jsonMatch) cleaned = jsonMatch[0];
+        data = JSON.parse(cleaned.trim());
+      } catch (err) {
         return <p className="text-sm text-zinc-300 whitespace-pre-wrap">{data}</p>;
       }
     }
@@ -102,11 +117,10 @@ export default function AptitudePage() {
         {data.practice_intensity && (
           <div className="flex items-center gap-2">
             <span className="text-xs text-zinc-500">Practice Intensity:</span>
-            <span className={`text-xs font-bold px-2 py-0.5 rounded ${
-              data.practice_intensity === "High" ? "bg-[#FF003C]/10 text-[#FF003C]" :
+            <span className={`text-xs font-bold px-2 py-0.5 rounded ${data.practice_intensity === "High" ? "bg-[#FF003C]/10 text-[#FF003C]" :
               data.practice_intensity === "Medium" ? "bg-[#FFD600]/10 text-[#FFD600]" :
-              "bg-[#00FF94]/10 text-[#00FF94]"
-            }`}>{data.practice_intensity}</span>
+                "bg-[#00FF94]/10 text-[#00FF94]"
+              }`}>{data.practice_intensity}</span>
           </div>
         )}
         {data.weak_concepts?.length > 0 && (
@@ -213,9 +227,8 @@ export default function AptitudePage() {
               key={i}
               data-testid={`video-${i}`}
               onClick={() => setSelectedVideo(vid)}
-              className={`glass-card p-3 text-left flex items-center gap-3 transition-all ${
-                selectedVideo === vid ? "border-[#7000FF]/50 neon-purple" : "hover:border-white/20"
-              }`}
+              className={`glass-card p-3 text-left flex items-center gap-3 transition-all ${selectedVideo === vid ? "border-[#7000FF]/50 neon-purple" : "hover:border-white/20"
+                }`}
             >
               <div className="w-9 h-9 rounded-lg bg-[#7000FF]/20 flex items-center justify-center flex-shrink-0">
                 <Play className="w-4 h-4 text-[#7000FF]" />
@@ -318,6 +331,14 @@ export default function AptitudePage() {
                 </div>
               </div>
               {quizResult?.analysis && renderAnalysis(quizResult.analysis)}
+              <div className="mt-6 flex flex-col sm:flex-row gap-4">
+                <Button onClick={() => navigate('/analytics')} className="bg-[#00F0FF] text-black font-bold uppercase tracking-wider hover:bg-white w-full sm:w-auto px-8 transition-colors">
+                  Save Progress
+                </Button>
+                <Button variant="outline" onClick={() => startQuiz(activeQuizTopic || selectedTopic?.quizTopics?.[0])} className="border-white/20 text-white w-full sm:w-auto px-8">
+                  Retake Quiz
+                </Button>
+              </div>
             </div>
           )}
         </div>

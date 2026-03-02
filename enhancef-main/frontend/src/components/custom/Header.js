@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Code2, Brain, Mic, User, Zap, Flame, Trophy } from "lucide-react";
+import { Code2, Brain, Mic, Zap, Flame, Trophy, User } from "lucide-react";
+import { UserButton } from "@clerk/clerk-react";
+import { dark } from "@clerk/themes";
 import axios from "axios";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -10,6 +12,7 @@ const navItems = [
   { path: "/coding", label: "Coding", icon: Code2 },
   { path: "/aptitude", label: "Aptitude", icon: Brain },
   { path: "/communication", label: "Communication", icon: Mic },
+  { path: "/profile", label: "Analytics", icon: User },
 ];
 
 export default function Header() {
@@ -17,7 +20,7 @@ export default function Header() {
   const [progress, setProgress] = useState({ xp: 0, level: 1, streak: 0 });
 
   useEffect(() => {
-    axios.get(`${API}/progress`).then(r => setProgress(r.data)).catch(() => {});
+    axios.get(`${API}/progress`).then(r => setProgress(r.data)).catch(() => { });
   }, [location.pathname]);
 
   const xpInLevel = progress.xp % 500;
@@ -49,11 +52,10 @@ export default function Header() {
                 key={item.path}
                 to={item.path}
                 data-testid={`nav-${item.label.toLowerCase()}`}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                  active
-                    ? "text-[#00F0FF] bg-[#00F0FF]/10 nav-tab-active"
-                    : "text-zinc-400 hover:text-white hover:bg-white/5"
-                }`}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${active
+                  ? "text-[#00F0FF] bg-[#00F0FF]/10 nav-tab-active"
+                  : "text-zinc-400 hover:text-white hover:bg-white/5"
+                  }`}
               >
                 <item.icon className="w-4 h-4" />
                 {item.label}
@@ -83,13 +85,17 @@ export default function Header() {
           </div>
 
           {/* Profile */}
-          <Link
-            to="/profile"
-            data-testid="nav-profile"
-            className="w-9 h-9 rounded-full bg-zinc-800 border border-white/10 flex items-center justify-center hover:border-[#00F0FF]/50 transition-colors"
-          >
-            <User className="w-4 h-4 text-zinc-400" />
-          </Link>
+          <div className="flex items-center justify-center">
+            <UserButton
+              appearance={{
+                baseTheme: dark,
+                elements: {
+                  avatarBox: "w-9 h-9 border border-white/10 hover:border-[#00F0FF]/50 transition-colors"
+                }
+              }}
+              afterSignOutUrl="/sign-in"
+            />
+          </div>
 
           {/* Mobile menu */}
           <div className="md:hidden flex items-center gap-2">

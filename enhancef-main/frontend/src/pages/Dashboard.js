@@ -44,7 +44,7 @@ export default function Dashboard() {
   const [progress, setProgress] = useState({ xp: 0, level: 1, streak: 0, quizzes_taken: 0, interviews_given: 0, codes_submitted: 0 });
 
   useEffect(() => {
-    axios.get(`${API}/progress`).then(r => setProgress(r.data)).catch(() => {});
+    axios.get(`${API}/progress`).then(r => setProgress(r.data)).catch(() => { });
   }, []);
 
   return (
@@ -131,7 +131,7 @@ function RecommendationCards() {
   useEffect(() => {
     axios.get(`${API}/recommendations`).then(r => {
       setRecs(r.data.recommendations || []);
-    }).catch(() => {});
+    }).catch(() => { });
   }, []);
 
   if (recs.length === 0) return null;
